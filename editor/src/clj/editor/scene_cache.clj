@@ -25,23 +25,17 @@
   (swap! object-caches conj [cache-id {:caches {} :make-fn make-fn :update-fn update-fn :destroy-batch-fn destroy-batch-fn}])
   nil)
 
-(defn- dump-cache [cache]
-  (prn "Cache dump" (count cache))
-  (doseq [entry cache]
-    (prn entry)))
-
 (defn request-object! [cache-id request-id context data]
   (let [cache-meta (get @object-caches cache-id)
-        make-fn (:make-fn cache-meta)
         cache (or (get-in cache-meta [:caches context])
                   (vcache/volatile-cache-factory {}))
-        new-cache (if (cache/has? cache request-id)
-                    (let [[object old-data] (cache/lookup cache request-id)]
-                      (if (not= data old-data)
-                        (let [update-fn (:update-fn cache-meta)]
-                          (cache/miss cache request-id [(update-fn context object data) data]))
-                        (cache/hit cache request-id)))
-                    (cache/miss cache request-id [(make-fn context data) data]))]
+        new-cache (if-let [[object old-data] (cache/lookup cache request-id)]
+                    (if (= old-data data)
+                      (cache/hit cache request-id)
+                      (let [update-fn (:update-fn cache-meta)]
+                        (cache/miss cache request-id [(update-fn context object data) data])))
+                    (let [make-fn (:make-fn cache-meta)]
+                      (cache/miss cache request-id [(make-fn context data) data])))]
     (swap! object-caches update-in [cache-id :caches] assoc context new-cache)
     (first (cache/lookup new-cache request-id))))
 

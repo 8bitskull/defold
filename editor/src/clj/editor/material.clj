@@ -16,7 +16,7 @@
   (:require [clojure.string :as string]
             [dynamo.graph :as g]
             [editor.build-target :as bt]
-            [editor.code.shader :as code.shader]
+            [editor.code.shader-compilation :as shader-compilation]
             [editor.defold-project :as project]
             [editor.gl.shader :as shader]
             [editor.graph-util :as gu]
@@ -33,9 +33,7 @@
             [util.coll :as coll :refer [pair]]
             [util.murmur :as murmur]
             [util.num :as num])
-  (:import [com.dynamo.bob.pipeline ShaderProgramBuilderEditor Shaderc$ShaderResource]
-           [com.dynamo.bob.pipeline.shader SPIRVReflector]
-           [com.dynamo.graphics.proto Graphics$CoordinateSpace Graphics$VertexAttribute Graphics$VertexAttribute$DataType Graphics$VertexAttribute$SemanticType Graphics$VertexAttribute$VectorType Graphics$VertexStepFunction]
+  (:import [com.dynamo.graphics.proto Graphics$CoordinateSpace Graphics$VertexAttribute Graphics$VertexAttribute$DataType Graphics$VertexAttribute$SemanticType Graphics$VertexAttribute$VectorType Graphics$VertexStepFunction]
            [com.dynamo.render.proto Material$MaterialDesc Material$MaterialDesc$Sampler Material$MaterialDesc$VertexSpace]
            [com.jogamp.opengl GL2]
            [editor.gl.shader ShaderLifecycle]
@@ -128,7 +126,7 @@
         (prop-resource-error _node-id :vertex-program vertex-program "Vertex Program" "vp")
         (prop-resource-error _node-id :fragment-program fragment-program "Fragment Program" "fp")
         (mapcat #(attribute-info->error-values % _node-id :attributes) attribute-infos))
-      (let [shader-desc-build-target (code.shader/make-shader-build-target _node-id [vertex-shader-source-info fragment-shader-source-info] max-page-count)
+      (let [shader-desc-build-target (shader-compilation/make-shader-build-target _node-id [vertex-shader-source-info fragment-shader-source-info] max-page-count)
             build-target-samplers (build-target-samplers (:samplers base-pb-msg) max-page-count)
             build-target-attributes (build-target-attributes attribute-infos)
             dep-build-targets [shader-desc-build-target]
@@ -142,45 +140,6 @@
             :build-fn build-material
             :user-data {:material-desc-with-build-resources material-desc-with-build-resources}
             :deps dep-build-targets})])))
-
-"A resource namespace is the first literal up until the first dot in a resource binding.
-For example, if we have a uniform buffer with some nested data types:
-
-struct MyMaterial {
-  vec4 diffuse;
-  vec4 specular;
-};
-
-uniform my_uniforms {
-  MyMaterial material;
-};
-
-When crosscompiled to SM120 (which is used by the editor), we will get two uniforms:
-_<id>.material.diffuse
-_<id>.material.specular
-
-To be able to map this in a material constant, we need to strip the namespace from the
-reflected data when the shader is created (see editor.gl.shader:make-shader-program) since
-there is no way a user can know what the generated id will be for older shaders.
-"
-(defn- resource-binding-namespaces [^SPIRVReflector reflector]
-  ;; Storage buffers (also known as SSBOs) will need the same mapping as uniform buffers,
-  ;; but since we don't support them in the editor, we don't gather their namespaces here.
-  (mapv
-    (fn [^Shaderc$ShaderResource uniform-buffer-object]
-      (str "_" (.id uniform-buffer-object)))
-    (.getUBOs reflector)))
-
-(defn- transpile-shader-source [resource-path shader-ext ^String shader-source ^long max-page-count]
-  (let [shader-type (code.shader/shader-type-from-ext shader-ext)
-        shader-language (code.shader/shader-language-to-java :language-glsl-sm120) ; use the old gles2 compatible shaders
-        result (ShaderProgramBuilderEditor/buildGLSLVariantTextureArray resource-path shader-source shader-type shader-language max-page-count)
-        full-source (.source result)
-        array-sampler-names-array (.arraySamplers result)
-        ^SPIRVReflector reflector (.reflector result)]
-    {:shader-source full-source
-     :resource-binding-namespaces (resource-binding-namespaces reflector)
-     :array-sampler-names (vec array-sampler-names-array)}))
 
 (defn- constant->val [constant]
   (case (:type constant)
@@ -207,8 +166,8 @@ there is no way a user can know what the generated id will be for older shaders.
 (g/defnk produce-shader [_node-id vertex-shader-source-info vertex-program fragment-shader-source-info fragment-program vertex-constants fragment-constants samplers max-page-count]
   (or (prop-resource-error _node-id :vertex-program vertex-program "Vertex Program" "vp")
       (prop-resource-error _node-id :fragment-program fragment-program "Fragment Program" "fp")
-      (let [augmented-vertex-shader-info (transpile-shader-source (resource/proj-path vertex-program) "vp" (:shader-source vertex-shader-source-info) max-page-count)
-            augmented-fragment-shader-info (transpile-shader-source (resource/proj-path fragment-program) "fp" (:shader-source fragment-shader-source-info) max-page-count)
+      (let [augmented-vertex-shader-info (shader-compilation/transpile-shader-source (resource/proj-path vertex-program) "vp" (:shader-source vertex-shader-source-info) max-page-count)
+            augmented-fragment-shader-info (shader-compilation/transpile-shader-source (resource/proj-path fragment-program) "fp" (:shader-source fragment-shader-source-info) max-page-count)
             array-sampler-name->slice-sampler-names
             (into {}
                   (comp (distinct)

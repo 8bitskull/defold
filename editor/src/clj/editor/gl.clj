@@ -168,24 +168,23 @@
 (defmacro gl-blend-func [gl sfactor dfactor]                             `(.glBlendFunc ~gl ~sfactor ~dfactor))
 (defmacro gl-front-face [gl mode]                                        `(.glFrontFace ~gl ~mode))
 
-(defn gl-get-integer-v
-  [^GL2 gl ^Integer param sz]
-  (let [buff (int-array sz)]
-    (.glGetIntegerv gl param buff 0)
-    buff))
+(defmacro ^:private gl-get-integer [gl param]
+  `(int
+     (let [out# (int-array 1)]
+       (.glGetIntegerv ~(with-meta gl {:tag `GL2}) (int ~param) out# 0)
+       (aget out# 0))))
 
 (defn gl-max-texture-units
-  [^GL2 gl]
-  (first (gl-get-integer-v gl GL2/GL_MAX_TEXTURE_UNITS 1)))
+  ^long [^GL2 gl]
+  (gl-get-integer gl GL2/GL_MAX_TEXTURE_UNITS))
 
 (defn gl-active-texture
   ^long [^GL2 gl]
-  (let [out (int-array 1)]
-    (.glGetIntegerv gl GL2/GL_ACTIVE_TEXTURE out 0)
-    (aget out 0)))
+  (gl-get-integer gl GL2/GL_ACTIVE_TEXTURE))
 
-(defn gl-current-program [^GL2 gl]
-  (first (gl-get-integer-v gl GL2/GL_CURRENT_PROGRAM 1)))
+(defn gl-current-program
+  ^long [^GL2 gl]
+  (gl-get-integer gl GL2/GL_CURRENT_PROGRAM))
 
 (defn text-renderer [font-name font-style font-size]
   (doto (TextRenderer. (Font. font-name font-style font-size) false false)
@@ -243,7 +242,7 @@
        (when (satisfies? p/GlBind b#)
          (p/bind b# gl# render-args#)))
      (let [res# (do ~@body)]
-       (doseq [b# (reverse items#)]
+       (doseq [b# (rseq items#)]
          (when (satisfies? p/GlBind b#)
            (p/unbind b# gl# render-args#)))
        res#)))
